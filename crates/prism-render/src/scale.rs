@@ -205,8 +205,41 @@ pub fn ticks(axis: &Axis, s: &AxisScale) -> Vec<Tick> {
     }
 }
 
-/// Render a tick value the way the axis asks for.
+/// Render a tick value the way the axis asks for, including any affixes.
 pub fn format_value(v: f64, axis: &Axis) -> String {
+    let body = format_number(v, axis);
+    let body = if axis.thousands_separator { group_thousands(&body) } else { body };
+    format!("{}{body}{}", axis.prefix, axis.suffix)
+}
+
+/// Insert a comma every three digits of the integer part.
+fn group_thousands(s: &str) -> String {
+    let (sign, rest) = match s.strip_prefix('-') {
+        Some(r) => ("-", r),
+        None => ("", s),
+    };
+    let (int, frac) = match rest.split_once('.') {
+        Some((i, f)) => (i, Some(f)),
+        None => (rest, None),
+    };
+    if !int.chars().all(|c| c.is_ascii_digit()) {
+        return s.to_string();
+    }
+    let mut grouped = String::new();
+    for (n, c) in int.chars().rev().enumerate() {
+        if n > 0 && n % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(c);
+    }
+    let int: String = grouped.chars().rev().collect();
+    match frac {
+        Some(f) => format!("{sign}{int}.{f}"),
+        None => format!("{sign}{int}"),
+    }
+}
+
+fn format_number(v: f64, axis: &Axis) -> String {
     use prism_doc::graph::NumberFormat;
     match axis.number_format {
         NumberFormat::Scientific => format!("{v:e}"),

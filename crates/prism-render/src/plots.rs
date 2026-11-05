@@ -1,8 +1,8 @@
 //! Geometry for each of Prism's graph families.
 
 use prism_doc::graph::{
-    BarLayout, BoxWhiskerStyle, Center, Color, Colormap, GraphSpec, Jitter, PlotKind, Series,
-    SlotSource, Spread,
+    AreaFill, BarLayout, BoxWhiskerStyle, Center, Color, Colormap, Direction, GraphSpec, Jitter,
+    MissingValues, PlotKind, Series, SlotSource, Spread,
 };
 use prism_doc::model::DataTable;
 
@@ -79,57 +79,102 @@ fn xy(
     for (i, s) in visible(spec) {
         let ys = y_scale(layout, s);
         let points = series::xy_points(table, s.dataset, Center::Mean, Spread::FromTable);
-        let screen: Vec<Point> = points
-            .iter()
-            .filter(|p| layout.x_scale.is_valid(p.x) && ys.is_valid(p.y))
-            .map(|p| pt(layout.x_scale.to_screen(p.x), ys.to_screen(p.y)))
-            .collect();
-        if screen.is_empty() {
+        let tag = Tag::Series(i);
+        let (dx, dy) = s.offset;
+
+        let at = |p: &series::DataPoint| {
+            pt(layout.x_scale.to_screen(p.x) + dx, ys.to_screen(p.y) + dy)
+        };
+        let plottable =
+            |p: &series::DataPoint| layout.x_scale.is_valid(p.x) && ys.is_valid(p.y);
+
+        // A break in the data splits the line into runs when missing values are
+        // set to leave a gap; otherwise everything joins into one run.
+        let mut runs: Vec<Vec<Point>> = Vec::new();
+        let mut run: Vec<Point> = Vec::new();
+        for p in &points {
+            if plottable(p) {
+                run.push(at(p));
+            } else if spec.missing_values == MissingValues::Gap && !run.is_empty() {
+                runs.push(std::mem::take(&mut run));
+            }
+        }
+        if !run.is_empty() {
+            runs.push(run);
+        }
+        if runs.is_empty() {
             continue;
         }
-        let tag = Tag::Series(i);
 
-        let path = if use_spline { marks::spline(&screen, 12) } else { screen.clone() };
+        let baseline = ys.to_screen(spec.baseline) + dy;
+        let fill_mode = if area && s.area_fill == AreaFill::None {
+            AreaFill::Below
+        } else {
+            s.area_fill
+        };
 
-        if area {
-            let baseline = ys.to_screen(ys.to_data(ys.screen_min).max(0.0).min(0.0));
-            let mut poly = path.clone();
-            poly.push(pt(path[path.len() - 1].x, baseline));
-            poly.push(pt(path[0].x, baseline));
-            scene.push(
-                tag,
-                DrawCmd::Polygon {
-                    points: poly,
-                    fill: marks::lighten(s.fill, 0.55).with_alpha(200),
-                    stroke: None,
-                },
-            );
-        }
+        for path in &runs {
+            let path = if use_spline { marks::spline(path, 12) } else { path.clone() };
 
-        if connect && s.line.is_visible() && path.len() > 1 {
-            scene.push(
-                tag,
-                DrawCmd::Polyline { points: path, stroke: (&s.line).into(), close: false },
-            );
+            if fill_mode != AreaFill::None && path.len() > 1 {
+                let edge = match fill_mode {
+                    AreaFill::Above => layout.plot.y,
+                    _ => baseline,
+                };
+                let mut poly = path.clone();
+                poly.push(pt(path[path.len() - 1].x, edge));
+                poly.push(pt(path[0].x, edge));
+                scene.push(
+                    tag,
+                    DrawCmd::Polygon { points: poly, fill: s.area_color, stroke: None },
+                );
+            }
+
+            if connect && s.show_line && s.line.is_visible() && path.len() > 1 {
+                scene.push(
+                    tag,
+                    DrawCmd::Polyline { points: path, stroke: (&s.line).into(), close: false },
+                );
+            }
         }
 
         for p in &points {
-            if !layout.x_scale.is_valid(p.x) || !ys.is_valid(p.y) {
+            if !plottable(p) {
                 continue;
             }
-            let x = layout.x_scale.to_screen(p.x);
-            let y = ys.to_screen(p.y);
-            marks::error_bar(
-                scene,
-                tag,
-                x,
-                y,
-                p.err_low.map(|e| ys.to_screen(p.y - e)),
-                p.err_high.map(|e| ys.to_screen(p.y + e)),
-                &s.error_bars,
-                false,
-            );
-            marks::symbol(scene, tag, pt(x, y), &s.symbol);
+            let c = at(p);
+            if s.show_error_bars {
+                marks::error_bar(
+                    scene,
+                    tag,
+                    c.x,
+                    c.y,
+                    p.err_low.map(|e| ys.to_screen(p.y - e) + dy),
+                    p.err_high.map(|e| ys.to_screen(p.y + e) + dy),
+                    &s.error_bars,
+                    false,
+                );
+            }
+            if s.show_symbols {
+                marks::symbol(scene, tag, c, &s.symbol);
+            }
+            if s.label_points {
+                scene.push(
+                    tag,
+                    DrawCmd::Text(TextRun {
+                        text: format!("{:.4}", p.y).trim_end_matches('0').trim_end_matches('.').to_string(),
+                        at: pt(c.x, c.y - s.symbol.size),
+                        size: 8.0,
+                        family: spec.legend.style.family.clone(),
+                        color: s.symbol.fill,
+                        bold: false,
+                        italic: false,
+                        h: HAlign::Center,
+                        v: VAlign::Bottom,
+                        rotation: 0.0,
+                    }),
+                );
+            }
         }
     }
 }
@@ -179,7 +224,8 @@ fn bars(
     };
     let geom = slots(spec, layout, per_slot);
     let ys = &layout.y_scale;
-    let baseline = ys.to_screen(0.0_f64.clamp(ys.to_data(ys.screen_min), ys.to_data(ys.screen_max)));
+    let horizontal = horizontal || spec.direction == Direction::Horizontal;
+    let baseline = ys.to_screen(spec.baseline);
 
     let slot_count = match spec.slots {
         SlotSource::Datasets => series.len(),
@@ -201,6 +247,9 @@ fn bars(
         .collect();
 
     for (si, (i, s)) in series.iter().enumerate() {
+        if !s.show_bars {
+            continue;
+        }
         let tag = Tag::Series(*i);
         for slot in 0..slot_count {
             let Some(mut v) = summary_value(table, s.dataset, slot, spec.slots, center) else {
@@ -214,7 +263,8 @@ fn bars(
                 v = v / total * 100.0;
             }
 
-            let slot_left = layout.x_scale.to_screen(slot as f64) + geom.width * spec.group_gap / 2.0;
+            let slot_left =
+                layout.x_scale.to_screen(slot as f64) + geom.width * spec.group_gap / 2.0;
             let x0 = match bar_layout {
                 BarLayout::Interleaved => {
                     slot_left + si as f32 * (geom.bar / (1.0 - spec.bar_gap))
@@ -230,20 +280,17 @@ fn bars(
                     acc[slot] += v;
                     (b, b + v)
                 }
-                _ => (0.0, v),
+                _ => (spec.baseline, v),
             };
 
             let y_top = ys.to_screen(top_v.max(base_v));
             let y_bot = ys.to_screen(top_v.min(base_v));
+            let bar_w = (geom.bar * s.bar_width.clamp(0.05, 2.0)).max(1.0);
+            let x0 = x0 + (geom.bar - bar_w) / 2.0;
             let rect = if horizontal {
-                Rect::new(
-                    baseline.min(y_top),
-                    x0,
-                    (y_bot - y_top).abs().max(0.5),
-                    geom.bar.max(1.0),
-                )
+                Rect::new(baseline.min(y_top), x0, (y_bot - y_top).abs().max(0.5), bar_w)
             } else {
-                Rect::new(x0, y_top, geom.bar.max(1.0), (y_bot - y_top).abs().max(0.5))
+                Rect::new(x0, y_top, bar_w, (y_bot - y_top).abs().max(0.5))
             };
 
             scene.push(
@@ -256,9 +303,11 @@ fn bars(
             );
 
             // Error bars only make sense on the outermost segment of a stack.
-            if !matches!(bar_layout, BarLayout::Stacked | BarLayout::StackedPercent) {
+            if s.show_error_bars
+                && !matches!(bar_layout, BarLayout::Stacked | BarLayout::StackedPercent)
+            {
                 if let Some((lo, hi)) = error_value(table, s.dataset, slot, spec.slots, spread) {
-                    let cx = x0 + geom.bar / 2.0;
+                    let cx = x0 + bar_w / 2.0;
                     marks::error_bar(
                         scene,
                         tag,

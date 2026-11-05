@@ -28,7 +28,7 @@ pub mod text;
 pub use scene::{DrawCmd, Point, Rect, Scene, Tag};
 pub use svg::to_svg;
 
-use prism_doc::graph::{Center, GraphSpec, PlotKind, Scale, Spread};
+use prism_doc::graph::{AreaFill, Center, GraphSpec, PlotKind, Scale, Spread};
 use prism_doc::model::DataTable;
 
 /// Lay out and draw a graph.
@@ -58,6 +58,21 @@ pub fn render(table: &DataTable, spec: &GraphSpec) -> Scene {
     let axis_less = matches!(spec.kind, PlotKind::PartsOfWhole { .. });
     if !axis_less {
         axes::draw(&mut scene, spec, &layout);
+    }
+    if let Some(stroke) = &spec.identity_line {
+        // y = x, clipped to whichever span the two axes share.
+        let lo = layout.x_scale.to_data(layout.plot.x).max(layout.y_scale.to_data(layout.plot.bottom()));
+        let hi = layout.x_scale.to_data(layout.plot.right()).min(layout.y_scale.to_data(layout.plot.y));
+        if hi > lo {
+            scene.push(
+                Tag::Grid,
+                DrawCmd::Line {
+                    from: scene::pt(layout.x_scale.to_screen(lo), layout.y_scale.to_screen(lo)),
+                    to: scene::pt(layout.x_scale.to_screen(hi), layout.y_scale.to_screen(hi)),
+                    stroke: stroke.into(),
+                },
+            );
+        }
     }
     plots::draw(&mut scene, spec, table, &layout);
     legend::draw(&mut scene, spec, &layout);
@@ -114,12 +129,13 @@ pub fn data_extent(table: &DataTable, spec: &GraphSpec) -> ((f64, f64), (f64, f6
         y = (0.0, 1.0);
     }
 
-    // Bars and areas are read against zero, so the axis must include it.
-    if matches!(spec.kind, PlotKind::Bar { .. } | PlotKind::XY { area: true, .. })
-        && spec.y.scale != Scale::Log(10.0)
+    // Bars and areas are read against the baseline, so the axis must include it.
+    let has_area = spec.series.iter().any(|s| s.area_fill != AreaFill::None);
+    if (matches!(spec.kind, PlotKind::Bar { .. } | PlotKind::XY { area: true, .. }) || has_area)
+        && !matches!(spec.y.scale, Scale::Log(_))
     {
-        y.0 = y.0.min(0.0);
-        y.1 = y.1.max(0.0);
+        y.0 = y.0.min(spec.baseline);
+        y.1 = y.1.max(spec.baseline);
     }
 
     let x = (spec.x.range.min.unwrap_or(x.0), spec.x.range.max.unwrap_or(x.1));

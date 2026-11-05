@@ -11,7 +11,6 @@ use crate::scene::Rect;
 use crate::text;
 
 /// Gap between the axis line and its tick labels.
-const LABEL_GAP: f32 = 4.0;
 /// Gap between tick labels and the axis title.
 const TITLE_GAP: f32 = 6.0;
 /// Page margin outside everything.
@@ -37,11 +36,11 @@ fn y_furniture(axis: &Axis, s: &AxisScale) -> f32 {
         .map(|l| text::width(l, axis.label_style.size))
         .fold(0.0, f32::max);
     let title = if axis.title.visible && !axis.title.text.is_empty() {
-        text::line_height(axis.title.style.size) + TITLE_GAP
+        text::line_height(axis.title.style.size) + axis.title_distance
     } else {
         0.0
     };
-    axis.tick_length + LABEL_GAP + labels + title
+    axis.tick_length + axis.numbering_distance + labels + title
 }
 
 /// Height taken by an X axis's tick labels and title.
@@ -70,7 +69,7 @@ fn x_furniture(axis: &Axis, s: &AxisScale) -> f32 {
     } else {
         0.0
     };
-    axis.tick_length + LABEL_GAP + labels + title
+    axis.tick_length + axis.numbering_distance + labels + title
 }
 
 /// Build a scale with provisional screen bounds, used while measuring.
@@ -135,10 +134,10 @@ pub fn compute(spec: &GraphSpec, x_range: (f64, f64), y_range: (f64, f64)) -> La
         let lw = spec
             .series
             .iter()
-            .filter(|x| x.visible)
+            .filter(|x| x.visible && x.in_legend)
             .map(|x| text::width(&x.label, s))
             .fold(0.0, f32::max);
-        let n = spec.series.iter().filter(|x| x.visible).count().max(1) as f32;
+        let n = spec.series.iter().filter(|x| x.visible && x.in_legend).count().max(1) as f32;
         match spec.legend.position {
             LegendPosition::Above | LegendPosition::Below => {
                 Some((lw * n + swatch * n + 12.0 * n, text::line_height(s) + 6.0))

@@ -20,9 +20,13 @@ try to be — see [what it does not do](#what-it-does-not-do).
 * **Edit** data sheets in a spreadsheet view: all eight Prism table kinds,
   replicates, mean/SD/N subcolumns, text and date columns.
 * **Graph** any sheet in ten families — XY, bar, column scatter, box and
-  whisker, violin, survival, pie and donut, heatmap, bubble, dendrogram — with
-  full control over axes, scales, ticks, symbols, lines, fills, error bars and
-  legends.
+  whisker, violin, survival, pie and donut, heatmap, bubble, dendrogram.
+* **Format** it through the same panels Prism uses: a *Change Graph Type* sheet
+  with one tab per table family, a *Format Graph* sheet with Appearance /
+  Datasets / Graph Settings, a *Format Axes* sheet with Axis / Frame and Origin
+  / Titles, and an inspector beside the graph tabbed Graph / Axes / Text / Line
+  / Shape / Legend / Page. If you know where a setting lives in Prism, it is in
+  the same place here.
 * **Save** back to `.prism` or `.pzfx`. Entries the model does not cover are
   preserved byte for byte, so saving never silently discards part of a document.
 * **Export** a graph to SVG, or a sheet to CSV.

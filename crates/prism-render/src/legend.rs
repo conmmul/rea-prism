@@ -30,7 +30,7 @@ pub fn draw(scene: &mut Scene, spec: &GraphSpec, layout: &Layout) {
     let mut x = area.x + 3.0;
     let mut y = area.y + 3.0;
 
-    for s in spec.series.iter().filter(|s| s.visible) {
+    for s in spec.series.iter().filter(|s| s.visible && s.in_legend) {
         let cy = y + lh / 2.0;
 
         // The key mirrors the mark the plot actually draws.

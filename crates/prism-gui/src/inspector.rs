@@ -1,224 +1,211 @@
-//! The format panel: every graph setting the renderer understands.
+//! The inspector panel.
+//!
+//! Prism keeps a narrow inspector beside the sheet whose tabs switch with what
+//! is selected — Graph, Axes, Text, Line, Shape, Legend, Page — each a stack of
+//! small sections. This mirrors that organisation and offers the settings that
+//! are quick to reach for; the full set lives in the Format dialogs.
 
-use egui::{ComboBox, DragValue, Slider};
+use egui::{DragValue, RichText, Ui};
 use prism_doc::graph::*;
 
-/// Show the inspector. Returns true when something changed.
-pub fn show(ui: &mut egui::Ui, spec: &mut GraphSpec, selected: &mut Option<usize>) -> bool {
+use crate::widgets::{color, combo, group, points, row, stroke, symbol_shape};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tab {
+    #[default]
+    Graph,
+    Axes,
+    Text,
+    Line,
+    Shape,
+    Legend,
+    Page,
+}
+
+impl Tab {
+    pub const ALL: [Tab; 7] =
+        [Tab::Graph, Tab::Axes, Tab::Text, Tab::Line, Tab::Shape, Tab::Legend, Tab::Page];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Tab::Graph => "Graph",
+            Tab::Axes => "Axes",
+            Tab::Text => "Text",
+            Tab::Line => "Line",
+            Tab::Shape => "Shape",
+            Tab::Legend => "Legend",
+            Tab::Page => "Page",
+        }
+    }
+}
+
+/// Show the inspector. Returns true when the spec changed.
+pub fn show(
+    ui: &mut Ui,
+    tab: &mut Tab,
+    spec: &mut GraphSpec,
+    selected: &mut Option<usize>,
+) -> bool {
     let mut changed = false;
 
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        ui.heading("Graph");
-        changed |= plot_kind(ui, spec);
-
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.label("Title");
-            changed |= ui.text_edit_singleline(&mut spec.title.text).changed();
-            changed |= ui.checkbox(&mut spec.title.visible, "show").changed();
-        });
-        ui.horizontal(|ui| {
-            ui.label("Size");
-            changed |= ui.add(DragValue::new(&mut spec.size.0).range(80.0..=2000.0).suffix(" pt")).changed();
-            ui.label("x");
-            changed |= ui.add(DragValue::new(&mut spec.size.1).range(60.0..=2000.0).suffix(" pt")).changed();
-        });
-        ui.horizontal(|ui| {
-            ui.label("Frame");
-            changed |= enum_combo(
-                ui,
-                "frame",
-                &mut spec.frame,
-                &[
-                    (Frame::PlainAxes, "Plain axes"),
-                    (Frame::Box, "Box"),
-                    (Frame::Offset, "Offset"),
-                ],
-            );
-        });
-        ui.horizontal(|ui| {
-            ui.label("Legend");
-            changed |= enum_combo(
-                ui,
-                "legend",
-                &mut spec.legend.position,
-                &[
-                    (LegendPosition::Right, "Right"),
-                    (LegendPosition::Left, "Left"),
-                    (LegendPosition::Above, "Above"),
-                    (LegendPosition::Below, "Below"),
-                    (LegendPosition::None, "None"),
-                ],
-            );
-            changed |= ui.checkbox(&mut spec.legend.frame, "frame").changed();
-        });
-
-        if matches!(spec.kind, PlotKind::Bar { .. }) {
-            ui.horizontal(|ui| {
-                ui.label("Bar gap");
-                changed |= ui.add(Slider::new(&mut spec.bar_gap, 0.0..=0.9)).changed();
-            });
-            ui.horizontal(|ui| {
-                ui.label("Group gap");
-                changed |= ui.add(Slider::new(&mut spec.group_gap, 0.0..=0.9)).changed();
-            });
-        }
-
-        ui.add_space(8.0);
-        egui::CollapsingHeader::new("X axis").default_open(true).show(ui, |ui| {
-            changed |= axis_ui(ui, &mut spec.x, "x");
-        });
-        egui::CollapsingHeader::new("Y axis").default_open(true).show(ui, |ui| {
-            changed |= axis_ui(ui, &mut spec.y, "y");
-        });
-
-        ui.add_space(8.0);
-        ui.heading("Datasets");
-        let kind = spec.kind.clone();
-        for (i, s) in spec.series.iter_mut().enumerate() {
-            let open = *selected == Some(i);
-            let header = egui::CollapsingHeader::new(if s.label.is_empty() {
-                format!("Dataset {}", i + 1)
-            } else {
-                s.label.clone()
-            })
-            .id_salt(("series", i))
-            .open(open.then_some(true));
-
-            let r = header.show(ui, |ui| {
-                changed |= series_ui(ui, s, i, &kind);
-            });
-            if r.header_response.clicked() {
-                *selected = if open { None } else { Some(i) };
+    // The tab strip, which Prism draws as a segmented control across the top.
+    ui.horizontal_wrapped(|ui| {
+        for t in Tab::ALL {
+            if ui.selectable_label(*tab == t, t.label()).clicked() {
+                *tab = t;
             }
         }
+    });
+    ui.separator();
+
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match *tab {
+        Tab::Graph => changed |= graph_tab(ui, spec, selected),
+        Tab::Axes => changed |= axes_tab(ui, spec),
+        Tab::Text => changed |= text_tab(ui, spec),
+        Tab::Line => changed |= line_tab(ui, spec, selected),
+        Tab::Shape => changed |= shape_tab(ui, spec, selected),
+        Tab::Legend => changed |= legend_tab(ui, spec),
+        Tab::Page => changed |= page_tab(ui, spec),
     });
 
     changed
 }
 
-fn plot_kind(ui: &mut egui::Ui, spec: &mut GraphSpec) -> bool {
-    let mut changed = false;
-    let current = kind_name(&spec.kind);
+/// The dataset the Line and Shape tabs act on.
+fn current<'a>(spec: &'a mut GraphSpec, selected: &Option<usize>) -> Option<&'a mut Series> {
+    let i = selected.unwrap_or(0);
+    spec.series.get_mut(i)
+}
 
+fn dataset_picker(ui: &mut Ui, spec: &GraphSpec, selected: &mut Option<usize>) {
+    if spec.series.len() < 2 {
+        return;
+    }
+    let i = selected.unwrap_or(0).min(spec.series.len() - 1);
     ui.horizontal(|ui| {
-        ui.label("Type");
-        ComboBox::from_id_salt("plot_kind")
-            .selected_text(current)
+        ui.label("Dataset");
+        egui::ComboBox::from_id_salt("inspector_dataset")
+            .selected_text(spec.series[i].label.clone())
             .show_ui(ui, |ui| {
-                for (name, make) in kind_choices() {
-                    if ui.selectable_label(current == name, name).clicked() {
-                        spec.kind = make();
-                        changed = true;
+                for (k, s) in spec.series.iter().enumerate() {
+                    if ui.selectable_label(i == k, &s.label).clicked() {
+                        *selected = Some(k);
                     }
                 }
             });
     });
+}
 
-    // Settings that belong to the chosen family.
-    match &mut spec.kind {
+fn graph_tab(ui: &mut Ui, spec: &mut GraphSpec, selected: &mut Option<usize>) -> bool {
+    let mut changed = false;
+
+    changed |= group(ui, "Graph", |ui| {
+        let mut c = row(ui, "Type", |ui| {
+            ui.label(RichText::new(kind_name(&spec.kind)).strong());
+            false
+        });
+        c |= row(ui, "Width", |ui| points(ui, &mut spec.size.0, 80.0..=2000.0).changed());
+        c |= row(ui, "Height", |ui| points(ui, &mut spec.size.1, 60.0..=2000.0).changed());
+        c
+    });
+
+    // Family-specific settings, the same ones the Change Graph Type sheet offers.
+    changed |= group(ui, "Options", |ui| match &mut spec.kind {
         PlotKind::XY { connect, area, spline } => {
-            ui.horizontal(|ui| {
-                changed |= ui.checkbox(connect, "Connect").changed();
-                changed |= ui.checkbox(area, "Area").changed();
-                changed |= ui.checkbox(spline, "Spline").changed();
-            });
+            let mut c = ui.checkbox(connect, "Connect the points").changed();
+            c |= ui.checkbox(area, "Fill the area beneath").changed();
+            c |= ui.checkbox(spline, "Smooth the line").changed();
+            c
         }
         PlotKind::Bar { layout, horizontal, center, spread } => {
-            ui.horizontal(|ui| {
-                ui.label("Layout");
-                changed |= enum_combo(
+            let mut c = row(ui, "Arrangement", |ui| {
+                combo(
                     ui,
                     "bar_layout",
                     layout,
                     &[
-                        (BarLayout::Interleaved, "Interleaved"),
+                        (BarLayout::Interleaved, "Side by side"),
                         (BarLayout::Stacked, "Stacked"),
-                        (BarLayout::StackedPercent, "Stacked 100%"),
+                        (BarLayout::StackedPercent, "Stacked to 100%"),
                         (BarLayout::Separated, "Separated"),
                     ],
-                );
+                )
             });
-            changed |= ui.checkbox(horizontal, "Horizontal").changed();
-            changed |= center_spread(ui, center, spread);
+            c |= ui.checkbox(horizontal, "Horizontal").changed();
+            c |= center_spread(ui, center, spread);
+            c
         }
         PlotKind::ScatterDot { jitter, center, spread } => {
-            ui.horizontal(|ui| {
-                ui.label("Spread points");
-                changed |= enum_combo(
+            let mut c = row(ui, "Spread points", |ui| {
+                combo(
                     ui,
                     "jitter",
                     jitter,
                     &[
                         (Jitter::Aligned, "Aligned"),
-                        (Jitter::Random, "Random"),
+                        (Jitter::Random, "Scattered"),
                         (Jitter::None, "Stacked"),
                     ],
-                );
+                )
             });
-            changed |= center_spread(ui, center, spread);
+            c |= center_spread(ui, center, spread);
+            c
         }
         PlotKind::BoxWhisker { style, horizontal, show_points } => {
-            ui.horizontal(|ui| {
-                ui.label("Whiskers");
-                changed |= enum_combo(
+            let mut c = row(ui, "Whiskers", |ui| {
+                combo(
                     ui,
                     "bw",
                     style,
                     &[
                         (BoxWhiskerStyle::Tukey, "Tukey"),
-                        (BoxWhiskerStyle::MinMax, "Min to max"),
-                        (BoxWhiskerStyle::Percentile10_90, "10-90 percentile"),
-                        (BoxWhiskerStyle::Percentile5_95, "5-95 percentile"),
+                        (BoxWhiskerStyle::MinMax, "Minimum to maximum"),
+                        (BoxWhiskerStyle::Percentile10_90, "10th to 90th centile"),
+                        (BoxWhiskerStyle::Percentile5_95, "5th to 95th centile"),
                         (BoxWhiskerStyle::MeanSd, "Mean with SD"),
                     ],
-                );
+                )
             });
-            ui.horizontal(|ui| {
-                changed |= ui.checkbox(horizontal, "Horizontal").changed();
-                changed |= ui.checkbox(show_points, "Show points").changed();
-            });
+            c |= ui.checkbox(horizontal, "Horizontal").changed();
+            c |= ui.checkbox(show_points, "Show every point").changed();
+            c
         }
         PlotKind::Violin { show_quartiles, horizontal } => {
-            ui.horizontal(|ui| {
-                changed |= ui.checkbox(show_quartiles, "Quartile lines").changed();
-                changed |= ui.checkbox(horizontal, "Horizontal").changed();
-            });
+            let mut c = ui.checkbox(show_quartiles, "Show quartile lines").changed();
+            c |= ui.checkbox(horizontal, "Horizontal").changed();
+            c
         }
         PlotKind::Survival { show_censor_marks, as_percent } => {
-            ui.horizontal(|ui| {
-                changed |= ui.checkbox(show_censor_marks, "Censor marks").changed();
-                changed |= ui.checkbox(as_percent, "Percent").changed();
-            });
+            let mut c = ui.checkbox(show_censor_marks, "Mark each event").changed();
+            c |= ui.checkbox(as_percent, "Show as a percentage").changed();
+            c
         }
         PlotKind::PartsOfWhole { donut_hole, start_angle, .. } => {
-            ui.horizontal(|ui| {
-                ui.label("Donut hole");
-                changed |= ui.add(Slider::new(donut_hole, 0.0..=0.9)).changed();
+            let mut c = row(ui, "Hole", |ui| {
+                ui.add(egui::Slider::new(donut_hole, 0.0..=0.9)).changed()
             });
-            ui.horizontal(|ui| {
-                ui.label("Start angle");
-                changed |= ui.add(DragValue::new(start_angle).range(0.0..=360.0).suffix("°")).changed();
+            c |= row(ui, "Start angle", |ui| {
+                ui.add(DragValue::new(start_angle).range(0.0..=360.0).suffix("°")).changed()
             });
+            c
         }
         PlotKind::Heatmap { show_values, .. } => {
-            changed |= ui.checkbox(show_values, "Show values").changed();
+            ui.checkbox(show_values, "Print the values").changed()
         }
         PlotKind::Bubble { .. } => {
-            ui.label("Bubble size and colour follow the table's extra variables.");
+            ui.label(RichText::new("Size and colour follow the extra variables.").small().weak());
+            false
         }
-        PlotKind::Dendrogram { horizontal } => {
-            changed |= ui.checkbox(horizontal, "Horizontal").changed();
-        }
-    }
+        PlotKind::Dendrogram { horizontal } => ui.checkbox(horizontal, "Horizontal").changed(),
+    });
+
+    dataset_picker(ui, spec, selected);
     changed
 }
 
-fn center_spread(ui: &mut egui::Ui, center: &mut Center, spread: &mut Spread) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.label("Centre");
-        changed |= enum_combo(
+fn center_spread(ui: &mut Ui, center: &mut Center, spread: &mut Spread) -> bool {
+    let mut c = row(ui, "Centre", |ui| {
+        combo(
             ui,
             "center",
             center,
@@ -226,290 +213,220 @@ fn center_spread(ui: &mut egui::Ui, center: &mut Center, spread: &mut Spread) ->
                 (Center::Mean, "Mean"),
                 (Center::Median, "Median"),
                 (Center::GeometricMean, "Geometric mean"),
-                (Center::None, "All points"),
+                (Center::None, "Every value"),
             ],
-        );
+        )
     });
-    ui.horizontal(|ui| {
-        ui.label("Error bars");
-        changed |= enum_combo(
+    c |= row(ui, "Error bars", |ui| {
+        combo(
             ui,
             "spread",
             spread,
             &[
-                (Spread::Sd, "SD"),
-                (Spread::Sem, "SEM"),
-                (Spread::Ci, "95% CI"),
-                (Spread::Range, "Range"),
-                (Spread::FromTable, "From table"),
+                (Spread::Sd, "Standard deviation"),
+                (Spread::Sem, "Standard error"),
+                (Spread::Ci, "95% confidence interval"),
+                (Spread::Range, "Full range"),
+                (Spread::FromTable, "From the table"),
                 (Spread::None, "None"),
             ],
-        );
+        )
     });
-    changed
+    c
 }
 
-fn axis_ui(ui: &mut egui::Ui, axis: &mut Axis, id: &str) -> bool {
+fn axes_tab(ui: &mut Ui, spec: &mut GraphSpec) -> bool {
     let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.label("Title");
-        changed |= ui.text_edit_singleline(&mut axis.title.text).changed();
-        changed |= ui.checkbox(&mut axis.title.visible, "show").changed();
-    });
-
-    ui.horizontal(|ui| {
-        ui.label("Scale");
-        let mut log = matches!(axis.scale, Scale::Log(_));
-        let categorical = axis.scale == Scale::Categorical;
-        if categorical {
-            ui.weak("categorical");
-        } else {
-            if ui.checkbox(&mut log, "log10").changed() {
-                axis.scale = if log { Scale::Log(10.0) } else { Scale::Linear };
-                changed = true;
-                if log {
-                    axis.number_format = NumberFormat::Power10;
+    for (name, axis) in [("X axis", &mut spec.x), ("Y axis", &mut spec.y)] {
+        changed |= group(ui, name, |ui| {
+            let mut c = row(ui, "Title", |ui| {
+                ui.text_edit_singleline(&mut axis.title.text).changed()
+            });
+            c |= ui.checkbox(&mut axis.title.visible, "Show the title").changed();
+            if axis.scale != Scale::Categorical {
+                let mut log = matches!(axis.scale, Scale::Log(_));
+                if ui.checkbox(&mut log, "Logarithmic").changed() {
+                    axis.scale = if log { Scale::Log(10.0) } else { Scale::Linear };
+                    if log {
+                        axis.number_format = NumberFormat::Power10;
+                    }
+                    c = true;
                 }
             }
-        }
-        changed |= ui.checkbox(&mut axis.reversed, "reverse").changed();
-    });
-
-    ui.horizontal(|ui| {
-        ui.label("Range");
-        let mut auto = axis.range.is_auto();
-        if ui.checkbox(&mut auto, "auto").changed() {
-            axis.range = if auto { Range::default() } else { Range { min: Some(0.0), max: Some(1.0) } };
-            changed = true;
-        }
-        if !auto {
-            let mut lo = axis.range.min.unwrap_or(0.0);
-            let mut hi = axis.range.max.unwrap_or(1.0);
-            if ui.add(DragValue::new(&mut lo).speed(0.1)).changed() {
-                axis.range.min = Some(lo);
-                changed = true;
+            let mut auto = axis.range.is_auto();
+            if ui.checkbox(&mut auto, "Automatic range").changed() {
+                axis.range = if auto {
+                    Range::default()
+                } else {
+                    Range { min: Some(0.0), max: Some(1.0) }
+                };
+                c = true;
             }
-            if ui.add(DragValue::new(&mut hi).speed(0.1)).changed() {
-                axis.range.max = Some(hi);
-                changed = true;
+            if !auto {
+                let mut lo = axis.range.min.unwrap_or(0.0);
+                let mut hi = axis.range.max.unwrap_or(1.0);
+                c |= row(ui, "From", |ui| {
+                    let r = ui.add(DragValue::new(&mut lo).speed(0.1)).changed();
+                    if r {
+                        axis.range.min = Some(lo);
+                    }
+                    r
+                });
+                c |= row(ui, "To", |ui| {
+                    let r = ui.add(DragValue::new(&mut hi).speed(0.1)).changed();
+                    if r {
+                        axis.range.max = Some(hi);
+                    }
+                    r
+                });
             }
-        }
-    });
-
-    ui.horizontal(|ui| {
-        ui.label("Ticks");
-        changed |= enum_combo(
-            ui,
-            &format!("{id}_tickdir"),
-            &mut axis.tick_direction,
-            &[
-                (TickDirection::Out, "Out"),
-                (TickDirection::In, "In"),
-                (TickDirection::Both, "Both"),
-                (TickDirection::None, "None"),
-            ],
-        );
-        ui.label("minor");
-        changed |= ui.add(DragValue::new(&mut axis.minor_ticks).range(0..=9)).changed();
-    });
-
-    ui.horizontal(|ui| {
-        ui.label("Numbers");
-        changed |= enum_combo(
-            ui,
-            &format!("{id}_numfmt"),
-            &mut axis.number_format,
-            &[
-                (NumberFormat::Decimal, "Decimal"),
-                (NumberFormat::Scientific, "Scientific"),
-                (NumberFormat::Power10, "Power of 10"),
-                (NumberFormat::Antilog, "Antilog"),
-                (NumberFormat::Percent, "Percent"),
-            ],
-        );
-    });
-
-    ui.horizontal(|ui| {
-        changed |= ui.checkbox(&mut axis.grid, "Grid lines").changed();
-        changed |= ui.checkbox(&mut axis.visible, "Show axis").changed();
-    });
-    changed
-}
-
-fn series_ui(ui: &mut egui::Ui, s: &mut Series, index: usize, kind: &PlotKind) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.label("Label");
-        changed |= ui.text_edit_singleline(&mut s.label).changed();
-    });
-    changed |= ui.checkbox(&mut s.visible, "Visible").changed();
-
-    let bars_like = matches!(
-        kind,
-        PlotKind::Bar { .. }
-            | PlotKind::BoxWhisker { .. }
-            | PlotKind::Violin { .. }
-            | PlotKind::PartsOfWhole { .. }
-    );
-
-    if bars_like {
-        ui.horizontal(|ui| {
-            ui.label("Fill");
-            changed |= color_edit(ui, &mut s.fill);
-            ui.label("Border");
-            changed |= color_edit(ui, &mut s.border.color);
-            changed |= ui.add(DragValue::new(&mut s.border.width).range(0.0..=6.0).speed(0.1)).changed();
-        });
-    } else {
-        ui.horizontal(|ui| {
-            ui.label("Symbol");
-            changed |= enum_combo(
-                ui,
-                &format!("sym{index}"),
-                &mut s.symbol.shape,
-                &[
-                    (SymbolShape::Circle, "Circle"),
-                    (SymbolShape::Square, "Square"),
-                    (SymbolShape::Triangle, "Triangle up"),
-                    (SymbolShape::TriangleDown, "Triangle down"),
-                    (SymbolShape::Diamond, "Diamond"),
-                    (SymbolShape::Plus, "Plus"),
-                    (SymbolShape::Cross, "Cross"),
-                    (SymbolShape::Star, "Star"),
-                    (SymbolShape::Dash, "Dash"),
-                    (SymbolShape::None, "None"),
-                ],
-            );
-            changed |= ui.add(DragValue::new(&mut s.symbol.size).range(0.0..=30.0).speed(0.2)).changed();
-        });
-        ui.horizontal(|ui| {
-            ui.label("Fill");
-            changed |= color_edit(ui, &mut s.symbol.fill);
-            ui.label("Edge");
-            changed |= color_edit(ui, &mut s.symbol.border);
-        });
-        ui.horizontal(|ui| {
-            ui.label("Line");
-            changed |= enum_combo(
-                ui,
-                &format!("line{index}"),
-                &mut s.line.style,
-                &[
-                    (LineStyle::Solid, "Solid"),
-                    (LineStyle::Dash, "Dash"),
-                    (LineStyle::Dot, "Dot"),
-                    (LineStyle::DashDot, "Dash-dot"),
-                    (LineStyle::None, "None"),
-                ],
-            );
-            changed |= color_edit(ui, &mut s.line.color);
-            changed |= ui.add(DragValue::new(&mut s.line.width).range(0.0..=8.0).speed(0.1)).changed();
+            c |= ui.checkbox(&mut axis.grid, "Grid lines").changed();
+            c
         });
     }
-
-    ui.horizontal(|ui| {
-        ui.label("Error bars");
-        changed |= enum_combo(
-            ui,
-            &format!("eb{index}"),
-            &mut s.error_bars.style,
-            &[
-                (ErrorBarStyle::Both, "Both"),
-                (ErrorBarStyle::Up, "Up only"),
-                (ErrorBarStyle::Down, "Down only"),
-                (ErrorBarStyle::None, "None"),
-            ],
-        );
-        changed |= ui.add(DragValue::new(&mut s.error_bars.cap_width).range(0.0..=20.0).speed(0.2)).changed();
-    });
-    changed |= ui.checkbox(&mut s.secondary_axis, "Plot on right Y axis").changed();
     changed
 }
 
-fn color_edit(ui: &mut egui::Ui, c: &mut Color) -> bool {
-    let mut rgba = [c.r, c.g, c.b, c.a];
-    if ui.color_edit_button_srgba_unmultiplied(&mut rgba).changed() {
-        *c = Color { r: rgba[0], g: rgba[1], b: rgba[2], a: rgba[3] };
-        true
-    } else {
-        false
-    }
-}
-
-fn enum_combo<T: PartialEq + Copy>(
-    ui: &mut egui::Ui,
-    id: &str,
-    value: &mut T,
-    options: &[(T, &str)],
-) -> bool {
+fn text_tab(ui: &mut Ui, spec: &mut GraphSpec) -> bool {
     let mut changed = false;
-    let current = options
-        .iter()
-        .find(|(v, _)| v == value)
-        .map(|(_, n)| *n)
-        .unwrap_or("");
-    ComboBox::from_id_salt(id).selected_text(current).show_ui(ui, |ui| {
-        for (v, name) in options {
-            if ui.selectable_label(v == value, *name).clicked() {
-                *value = *v;
-                changed = true;
+    changed |= group(ui, "Graph title", |ui| {
+        let mut c = row(ui, "Text", |ui| {
+            ui.text_edit_singleline(&mut spec.title.text).changed()
+        });
+        c |= ui.checkbox(&mut spec.title.visible, "Show").changed();
+        c |= row(ui, "Size", |ui| points(ui, &mut spec.title.style.size, 6.0..=36.0).changed());
+        c |= ui.checkbox(&mut spec.title.style.bold, "Bold").changed();
+        c |= ui.checkbox(&mut spec.title.style.italic, "Italic").changed();
+        c
+    });
+    changed |= group(ui, "Axis numbering", |ui| {
+        let mut c = row(ui, "Size", |ui| {
+            let r = points(ui, &mut spec.x.label_style.size, 5.0..=24.0).changed();
+            if r {
+                spec.y.label_style.size = spec.x.label_style.size;
             }
-        }
+            r
+        });
+        c |= row(ui, "X rotation", |ui| {
+            ui.add(DragValue::new(&mut spec.x.label_rotation).range(-90.0..=90.0).suffix("°"))
+                .changed()
+        });
+        c
     });
     changed
+}
+
+fn line_tab(ui: &mut Ui, spec: &mut GraphSpec, selected: &mut Option<usize>) -> bool {
+    dataset_picker(ui, spec, selected);
+    let sel = *selected;
+    let Some(s) = current(spec, &sel) else {
+        ui.label("No dataset selected.");
+        return false;
+    };
+    group(ui, "Line", |ui| {
+        let mut c = ui.checkbox(&mut s.show_line, "Show the line").changed();
+        ui.add_enabled_ui(s.show_line, |ui| {
+            c |= row(ui, "Style", |ui| stroke(ui, "insp_line", &mut s.line));
+        });
+        c
+    })
+}
+
+fn shape_tab(ui: &mut Ui, spec: &mut GraphSpec, selected: &mut Option<usize>) -> bool {
+    dataset_picker(ui, spec, selected);
+    let sel = *selected;
+    let Some(s) = current(spec, &sel) else {
+        ui.label("No dataset selected.");
+        return false;
+    };
+    let mut changed = group(ui, "Symbols", |ui| {
+        let mut c = ui.checkbox(&mut s.show_symbols, "Show symbols").changed();
+        ui.add_enabled_ui(s.show_symbols, |ui| {
+            c |= row(ui, "Shape", |ui| symbol_shape(ui, "insp_shape", &mut s.symbol.shape));
+            c |= row(ui, "Size", |ui| points(ui, &mut s.symbol.size, 0.0..=40.0).changed());
+            c |= row(ui, "Fill", |ui| color(ui, &mut s.symbol.fill));
+            c |= row(ui, "Border", |ui| color(ui, &mut s.symbol.border));
+        });
+        c
+    });
+    changed |= group(ui, "Fill", |ui| {
+        let mut c = row(ui, "Colour", |ui| color(ui, &mut s.fill));
+        c |= row(ui, "Border", |ui| stroke(ui, "insp_border", &mut s.border));
+        c
+    });
+    changed
+}
+
+fn legend_tab(ui: &mut Ui, spec: &mut GraphSpec) -> bool {
+    let mut changed = group(ui, "Legend", |ui| {
+        let mut c = row(ui, "Position", |ui| {
+            combo(
+                ui,
+                "insp_legend",
+                &mut spec.legend.position,
+                &[
+                    (LegendPosition::Right, "Right"),
+                    (LegendPosition::Left, "Left"),
+                    (LegendPosition::Above, "Above"),
+                    (LegendPosition::Below, "Below"),
+                    (LegendPosition::None, "Hidden"),
+                ],
+            )
+        });
+        c |= ui.checkbox(&mut spec.legend.frame, "Draw a box").changed();
+        c |= row(ui, "Size", |ui| points(ui, &mut spec.legend.style.size, 5.0..=24.0).changed());
+        c
+    });
+    changed |= group(ui, "Entries", |ui| {
+        let mut c = false;
+        for s in spec.series.iter_mut() {
+            ui.horizontal(|ui| {
+                c |= ui.checkbox(&mut s.in_legend, "").changed();
+                c |= ui.text_edit_singleline(&mut s.label).changed();
+            });
+        }
+        c
+    });
+    changed
+}
+
+fn page_tab(ui: &mut Ui, spec: &mut GraphSpec) -> bool {
+    group(ui, "Page", |ui| {
+        let mut c = row(ui, "Background", |ui| color(ui, &mut spec.background));
+        c |= row(ui, "Plotting area", |ui| color(ui, &mut spec.plot_background));
+        c |= row(ui, "Frame", |ui| {
+            combo(
+                ui,
+                "insp_frame",
+                &mut spec.frame,
+                &[
+                    (Frame::PlainAxes, "Two axes"),
+                    (Frame::Box, "Box"),
+                    (Frame::Offset, "Offset"),
+                ],
+            )
+        });
+        c
+    })
 }
 
 pub fn kind_name(kind: &PlotKind) -> &'static str {
     match kind {
-        PlotKind::XY { .. } => "XY",
-        PlotKind::Bar { .. } => "Bar",
-        PlotKind::ScatterDot { .. } => "Column scatter",
+        PlotKind::XY { connect: false, .. } => "Points only",
+        PlotKind::XY { area: true, .. } => "Area fill",
+        PlotKind::XY { spline: true, .. } => "Smoothed curve",
+        PlotKind::XY { .. } => "Points and line",
+        PlotKind::Bar { layout: BarLayout::Stacked, .. } => "Stacked bars",
+        PlotKind::Bar { layout: BarLayout::StackedPercent, .. } => "Stacked to 100%",
+        PlotKind::Bar { .. } => "Bars",
+        PlotKind::ScatterDot { .. } => "Scatter with mean",
         PlotKind::BoxWhisker { .. } => "Box and whisker",
         PlotKind::Violin { .. } => "Violin",
-        PlotKind::Survival { .. } => "Survival",
+        PlotKind::Survival { .. } => "Survival staircase",
+        PlotKind::PartsOfWhole { donut_hole, .. } if *donut_hole > 0.0 => "Donut",
         PlotKind::PartsOfWhole { .. } => "Pie",
-        PlotKind::Heatmap { .. } => "Heatmap",
-        PlotKind::Bubble { .. } => "Bubble",
+        PlotKind::Heatmap { .. } => "Heat map",
+        PlotKind::Bubble { .. } => "Bubble plot",
         PlotKind::Dendrogram { .. } => "Dendrogram",
     }
-}
-
-#[allow(clippy::type_complexity)]
-fn kind_choices() -> Vec<(&'static str, fn() -> PlotKind)> {
-    vec![
-        ("XY", || PlotKind::XY { connect: false, area: false, spline: false }),
-        ("Bar", || PlotKind::Bar {
-            layout: BarLayout::Interleaved,
-            horizontal: false,
-            center: Center::Mean,
-            spread: Spread::Sd,
-        }),
-        ("Column scatter", || PlotKind::ScatterDot {
-            jitter: Jitter::Aligned,
-            center: Center::Mean,
-            spread: Spread::Sd,
-        }),
-        ("Box and whisker", || PlotKind::BoxWhisker {
-            style: BoxWhiskerStyle::Tukey,
-            horizontal: false,
-            show_points: false,
-        }),
-        ("Violin", || PlotKind::Violin { show_quartiles: true, horizontal: false }),
-        ("Survival", || PlotKind::Survival { show_censor_marks: true, as_percent: true }),
-        ("Pie", || PlotKind::PartsOfWhole {
-            donut_hole: 0.0,
-            start_angle: 90.0,
-            explode: Vec::new(),
-        }),
-        ("Heatmap", || PlotKind::Heatmap {
-            colormap: Colormap::default(),
-            show_values: false,
-        }),
-        ("Bubble", || PlotKind::Bubble {
-            size_variable: None,
-            color_variable: None,
-            colormap: Colormap::default(),
-        }),
-        ("Dendrogram", || PlotKind::Dendrogram { horizontal: false }),
-    ]
 }

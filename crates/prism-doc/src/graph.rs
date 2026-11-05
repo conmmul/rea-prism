@@ -203,8 +203,22 @@ pub struct Axis {
     /// Draw a grid line at every major tick.
     pub grid: bool,
     pub grid_color: Color,
+    pub grid_style: LineStyle,
+    pub grid_width: f32,
+    /// Grid lines at the minor ticks as well.
+    pub minor_grid: bool,
     /// Reverse the direction of increasing values.
     pub reversed: bool,
+    /// Written before every tick label, e.g. a currency sign.
+    pub prefix: String,
+    /// Written after every tick label, e.g. a unit.
+    pub suffix: String,
+    /// Group the integer part in thousands.
+    pub thousands_separator: bool,
+    /// Gap in points between the axis line and its tick labels.
+    pub numbering_distance: f32,
+    /// Gap in points between the tick labels and the axis title.
+    pub title_distance: f32,
 }
 
 impl Default for Axis {
@@ -228,7 +242,15 @@ impl Default for Axis {
             color: Color::BLACK,
             grid: false,
             grid_color: Color::rgb(200, 200, 200),
+            grid_style: LineStyle::Solid,
+            grid_width: 0.5,
+            minor_grid: false,
             reversed: false,
+            prefix: String::new(),
+            suffix: String::new(),
+            thousands_separator: false,
+            numbering_distance: 4.0,
+            title_distance: 6.0,
         }
     }
 }
@@ -541,6 +563,23 @@ pub struct Series {
     pub error_bars: ErrorBars,
     /// Plot against the right-hand Y axis instead of the left.
     pub secondary_axis: bool,
+
+    // Prism lets each element of a plotted dataset be shown or hidden
+    // independently, rather than inferring it from the graph type alone.
+    pub show_symbols: bool,
+    pub show_line: bool,
+    pub show_bars: bool,
+    pub show_error_bars: bool,
+    /// Include this dataset in the legend.
+    pub in_legend: bool,
+    /// Write each point's value beside it.
+    pub label_points: bool,
+    pub area_fill: AreaFill,
+    pub area_color: Color,
+    /// Bar width as a fraction of its slot.
+    pub bar_width: f32,
+    /// Shift this dataset's marks, in points, to separate overlapping series.
+    pub offset: (f32, f32),
 }
 
 impl Series {
@@ -556,6 +595,16 @@ impl Series {
             border: Stroke::new(Color::BLACK, 1.0),
             error_bars: ErrorBars::default(),
             secondary_axis: false,
+            show_symbols: true,
+            show_line: true,
+            show_bars: true,
+            show_error_bars: true,
+            in_legend: true,
+            label_points: false,
+            area_fill: AreaFill::None,
+            area_color: c.with_alpha(90),
+            bar_width: 1.0,
+            offset: (0.0, 0.0),
         }
     }
 }
@@ -590,6 +639,37 @@ impl Default for Legend {
             offset: (0.0, 0.0),
         }
     }
+}
+
+/// Which way bars and columns run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Direction {
+    #[default]
+    Vertical,
+    Horizontal,
+}
+
+/// Where an area fill is painted relative to its curve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AreaFill {
+    #[default]
+    None,
+    /// Between the curve and the baseline, below it.
+    Below,
+    /// Between the curve and the top of the plot.
+    Above,
+    /// Between this curve and the next visible one.
+    ToNextDataset,
+}
+
+/// How a line crosses a row with no value in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MissingValues {
+    /// Join across the gap.
+    #[default]
+    Connect,
+    /// Break the line.
+    Gap,
 }
 
 /// What one slot along a categorical axis stands for.
@@ -629,6 +709,20 @@ pub struct GraphSpec {
     pub bar_gap: f32,
     /// Gap between groups, as a fraction of slot width.
     pub group_gap: f32,
+    /// Empty slot width before the first category and after the last.
+    pub gap_before_first: f32,
+    pub gap_after_last: f32,
+    /// Which way bars run.
+    pub direction: Direction,
+    /// Value the bars and areas are measured from.
+    pub baseline: f64,
+    pub hide_baseline: bool,
+    /// How lines treat a row with no value.
+    pub missing_values: MissingValues,
+    pub axis_color: Color,
+    pub axis_width: f32,
+    /// A y = x reference line, which Prism offers on XY graphs.
+    pub identity_line: Option<Stroke>,
     /// The data sheet this graph draws from.
     pub source: Option<Uid>,
 }
@@ -651,6 +745,15 @@ impl Default for GraphSpec {
             slots: SlotSource::Datasets,
             bar_gap: 0.1,
             group_gap: 0.4,
+            gap_before_first: 0.5,
+            gap_after_last: 0.5,
+            direction: Direction::Vertical,
+            baseline: 0.0,
+            hide_baseline: false,
+            missing_values: MissingValues::Connect,
+            axis_color: Color::BLACK,
+            axis_width: 1.0,
+            identity_line: None,
             source: None,
         }
     }

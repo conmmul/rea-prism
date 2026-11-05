@@ -8,6 +8,7 @@ use prism_doc::model::{new_uid, DataSheet, DataSet, GraphKind, GraphSheet, Table
 use prism_doc::Document;
 use prism_render::Scene;
 
+use crate::dialogs::{self, Dialog, DialogState};
 use crate::grid::{self, Editing};
 use crate::{inspector, paint};
 
@@ -30,6 +31,8 @@ pub struct App {
     scene: Option<Scene>,
     scene_for: Option<usize>,
     selected_series: Option<usize>,
+    inspector_tab: inspector::Tab,
+    dialogs: DialogState,
     zoom: f32,
     status: String,
 }
@@ -47,6 +50,8 @@ impl Default for App {
             scene: None,
             scene_for: None,
             selected_series: None,
+            inspector_tab: inspector::Tab::default(),
+            dialogs: DialogState::default(),
             zoom: 1.0,
             status: "New document".into(),
         }
@@ -280,10 +285,12 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.handle_shortcuts(ui.ctx());
         self.menu_bar(ui);
+        self.toolbar(ui);
         self.navigator(ui);
         self.status_bar(ui);
         self.inspector_panel(ui);
         self.central(ui);
+        self.dialogs(ui.ctx());
 
         // Opening a document by dropping it on the window.
         let dropped = ui.ctx().input(|i| i.raw.dropped_files.clone());
@@ -365,6 +372,19 @@ impl App {
                         self.new_graph();
                         ui.close();
                     }
+                    ui.separator();
+                    if ui.button("Change Graph Type…").clicked() {
+                        self.dialogs.open = Some(Dialog::ChangeGraphType);
+                        ui.close();
+                    }
+                    if ui.button("Format Graph…").clicked() {
+                        self.dialogs.open = Some(Dialog::FormatGraph);
+                        ui.close();
+                    }
+                    if ui.button("Format Axes…").clicked() {
+                        self.dialogs.open = Some(Dialog::FormatAxes);
+                        ui.close();
+                    }
                 });
                 ui.menu_button("View", |ui| {
                     if ui.button("Zoom in").clicked() {
@@ -391,6 +411,87 @@ impl App {
                 }
             });
         });
+    }
+
+    /// The action strip under the menu, grouped the way Prism groups its toolbar.
+    fn toolbar(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::top("toolbar").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.add_space(2.0);
+                let on_data = matches!(self.selection, Selection::Data(_));
+                let on_graph = matches!(self.selection, Selection::Graph(_));
+
+                if ui
+                    .add_enabled(on_data, egui::Button::new("New Graph"))
+                    .on_hover_text("Build the graph this table calls for")
+                    .clicked()
+                {
+                    self.new_graph();
+                }
+                ui.separator();
+                if ui
+                    .add_enabled(on_graph, egui::Button::new("Change…"))
+                    .on_hover_text("Change the graph type")
+                    .clicked()
+                {
+                    self.dialogs.open = Some(Dialog::ChangeGraphType);
+                }
+                if ui
+                    .add_enabled(on_graph, egui::Button::new("Format Graph…"))
+                    .clicked()
+                {
+                    self.dialogs.open = Some(Dialog::FormatGraph);
+                }
+                if ui
+                    .add_enabled(on_graph, egui::Button::new("Format Axes…"))
+                    .clicked()
+                {
+                    self.dialogs.open = Some(Dialog::FormatAxes);
+                }
+                ui.separator();
+                if ui
+                    .add_enabled(on_graph || on_data, egui::Button::new("Export…"))
+                    .clicked()
+                {
+                    if on_graph {
+                        self.export_svg();
+                    } else {
+                        self.export_csv();
+                    }
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("+").clicked() {
+                        self.zoom = (self.zoom * 1.25).min(8.0);
+                    }
+                    if ui.small_button("−").clicked() {
+                        self.zoom = (self.zoom / 1.25).max(0.2);
+                    }
+                });
+            });
+        });
+    }
+
+    /// Host whichever modal dialog is open.
+    fn dialogs(&mut self, ctx: &egui::Context) {
+        let Selection::Graph(i) = self.selection else {
+            self.dialogs.open = None;
+            return;
+        };
+        if i >= self.doc.graph_sheets.len() {
+            return;
+        }
+        let Some(table) = self.table_for(i).cloned() else { return };
+        let changed = dialogs::show(
+            ctx,
+            &mut self.dialogs,
+            &mut self.doc.graph_sheets[i].spec,
+            &table,
+        );
+        if changed {
+            self.dirty = true;
+            self.invalidate();
+        }
     }
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {
@@ -469,6 +570,9 @@ impl App {
                     }
                 }
 
+                section(ui, "Layouts", 0);
+                ui.label(RichText::new("  none").small().weak());
+
                 if !self.doc.info_sheets.is_empty() {
                     section(ui, "Info", self.doc.info_sheets.len());
                     for i in 0..self.doc.info_sheets.len() {
@@ -492,7 +596,12 @@ impl App {
         }
         egui::Panel::right("inspector").default_size(300.0).show(ui, |ui| {
             let mut selected = self.selected_series;
-            let changed = inspector::show(ui, &mut self.doc.graph_sheets[i].spec, &mut selected);
+            let changed = inspector::show(
+                ui,
+                &mut self.inspector_tab,
+                &mut self.doc.graph_sheets[i].spec,
+                &mut selected,
+            );
             if selected != self.selected_series {
                 self.selected_series = selected;
             }

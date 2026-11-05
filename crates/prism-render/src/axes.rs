@@ -7,7 +7,6 @@ use crate::scale::{self, AxisScale};
 use crate::scene::{pt, DrawCmd, HAlign, Rect, Scene, Stroke, Tag, TextRun, VAlign};
 use crate::text;
 
-const LABEL_GAP: f32 = 4.0;
 const TITLE_GAP: f32 = 6.0;
 
 pub fn draw(scene: &mut Scene, spec: &GraphSpec, layout: &Layout) {
@@ -30,7 +29,7 @@ pub fn draw(scene: &mut Scene, spec: &GraphSpec, layout: &Layout) {
                 DrawCmd::Rect {
                     rect: plot,
                     fill: prism_doc::graph::Color::TRANSPARENT,
-                    stroke: Some(Stroke::new(spec.x.color, spec.x.line_width)),
+                    stroke: Some(Stroke::new(spec.axis_color, spec.axis_width)),
                 },
             );
         }
@@ -42,7 +41,7 @@ pub fn draw(scene: &mut Scene, spec: &GraphSpec, layout: &Layout) {
                     DrawCmd::Line {
                         from: pt(plot.x, plot.bottom() + off),
                         to: pt(plot.right(), plot.bottom() + off),
-                        stroke: Stroke::new(spec.x.color, spec.x.line_width),
+                        stroke: Stroke::new(spec.axis_color, spec.axis_width),
                     },
                 );
             }
@@ -52,7 +51,7 @@ pub fn draw(scene: &mut Scene, spec: &GraphSpec, layout: &Layout) {
                     DrawCmd::Line {
                         from: pt(plot.x - off, plot.y),
                         to: pt(plot.x - off, plot.bottom()),
-                        stroke: Stroke::new(spec.y.color, spec.y.line_width),
+                        stroke: Stroke::new(spec.axis_color, spec.axis_width),
                     },
                 );
             }
@@ -88,8 +87,12 @@ fn draw_grid(scene: &mut Scene, axis: &Axis, s: &AxisScale, plot: Rect, vertical
     if !axis.grid {
         return;
     }
-    for t in scale::ticks(axis, s).iter().filter(|t| t.major) {
-        let stroke = Stroke::new(axis.grid_color, 0.5);
+    for t in scale::ticks(axis, s).iter().filter(|t| t.major || axis.minor_grid) {
+        let mut stroke = Stroke::new(axis.grid_color, axis.grid_width.max(0.1));
+        stroke.style = axis.grid_style;
+        if !t.major {
+            stroke.width *= 0.6;
+        }
         if vertical {
             let x = s.to_screen(t.value);
             scene.push(
@@ -122,7 +125,7 @@ fn draw_x_ticks(scene: &mut Scene, axis: &Axis, s: &AxisScale, plot: Rect) {
     }
     let stroke = Stroke::new(axis.color, axis.line_width);
     let (a, b) = tick_span(axis.tick_direction, axis.tick_length);
-    let mut label_y = plot.bottom() + axis.tick_length.max(0.0) + LABEL_GAP;
+    let mut label_y = plot.bottom() + axis.tick_length.max(0.0) + axis.numbering_distance;
 
     for t in scale::ticks(axis, s) {
         let x = s.to_screen(t.value);
@@ -174,7 +177,7 @@ fn draw_x_ticks(scene: &mut Scene, axis: &Axis, s: &AxisScale, plot: Rect) {
         } else {
             0.0
         };
-        label_y += label_h + TITLE_GAP;
+        label_y += label_h + axis.title_distance;
         scene.push(
             Tag::Axis,
             DrawCmd::Text(TextRun {
@@ -225,7 +228,7 @@ fn draw_y_ticks(scene: &mut Scene, axis: &Axis, s: &AxisScale, plot: Rect, right
                 Tag::Axis,
                 DrawCmd::Text(TextRun {
                     text: label.clone(),
-                    at: pt(axis_x + dir * (axis.tick_length.max(0.0) + LABEL_GAP), y),
+                    at: pt(axis_x + dir * (axis.tick_length.max(0.0) + axis.numbering_distance), y),
                     size: axis.label_style.size,
                     family: axis.label_style.family.clone(),
                     color: axis.label_style.color,
@@ -241,7 +244,11 @@ fn draw_y_ticks(scene: &mut Scene, axis: &Axis, s: &AxisScale, plot: Rect, right
 
     if axis.title.visible && !axis.title.text.is_empty() {
         let x = axis_x
-            + dir * (axis.tick_length.max(0.0) + LABEL_GAP + widest + TITLE_GAP);
+            + dir
+                * (axis.tick_length.max(0.0)
+                    + axis.numbering_distance
+                    + widest
+                    + axis.title_distance);
         scene.push(
             Tag::Axis,
             DrawCmd::Text(TextRun {

@@ -1,9 +1,11 @@
 //! A desktop reader, editor and graph renderer for GraphPad Prism documents.
 
 mod app;
+mod dialogs;
 mod grid;
 mod inspector;
 mod paint;
+mod widgets;
 
 fn main() -> eframe::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
