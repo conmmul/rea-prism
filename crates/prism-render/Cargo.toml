@@ -1,0 +1,11 @@
+[package]
+name = "prism-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Graph rendering for Prism documents: layout, scales and a backend-agnostic draw list"
+
+[dependencies]
+prism-doc.workspace = true
+log.workspace = true
