@@ -1,0 +1,22 @@
+[package]
+name = "prism-gui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Desktop application for viewing and editing GraphPad Prism documents"
+
+[[bin]]
+name = "rea-prism"
+path = "src/main.rs"
+
+[dependencies]
+prism-doc.workspace = true
+prism-render.workspace = true
+eframe.workspace = true
+egui.workspace = true
+rfd.workspace = true
+anyhow.workspace = true
+log.workspace = true
+serde_json.workspace = true
+env_logger.workspace = true
