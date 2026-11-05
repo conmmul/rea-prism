@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = ["crates/prism-doc", "crates/prism-render", "crates/prism-gui"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/conmmul/rea-prism"
+
+[workspace.dependencies]
+prism-doc = { path = "crates/prism-doc" }
+prism-render = { path = "crates/prism-render" }
+
+serde = { version = "1.0.217", features = ["derive"] }
+serde_json = "1.0.135"
+quick-xml = { version = "0.37.2", features = ["serialize"] }
+zip = { version = "2.2.2", default-features = false, features = ["deflate", "time"] }
+flate2 = "1.0.35"
+csv = "1.3.1"
+uuid = { version = "1.12.0", features = ["v4", "serde"] }
+time = { version = "0.3.37", features = ["formatting", "parsing", "macros"] }
+thiserror = "2.0.11"
+anyhow = "1.0.95"
+log = "0.4.25"
+env_logger = "0.11.6"
+
+eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "wgpu", "glow", "wayland", "x11"] }
+egui = "0.37.0"
+egui_extras = { version = "0.37.0", features = ["svg"] }
+rfd = "0.17.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
