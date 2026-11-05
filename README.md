@@ -1,12 +1,15 @@
 # rea-prism
 
-A desktop application for GraphPad Prism documents, written in Rust. It reads and
-writes both Prism file formats, edits data tables, and draws Prism's graph
-families — without Prism installed.
+Open, edit and plot your own GraphPad Prism data files on a machine that does not
+have Prism on it. A small Rust desktop app that reads and writes both Prism
+document formats, edits the data tables, and draws the usual graph types.
 
-The file formats were recovered from a shipped copy of Prism 11.0.2; see
-[`docs/FORMAT.md`](docs/FORMAT.md) for the specification and the evidence behind
-it.
+It exists for interoperability: getting at your own measurements when you are on
+a machine without a Prism seat, scripting an export, or keeping a plot reproducible
+alongside the rest of an analysis. It is not a substitute for Prism and does not
+try to be — see [what it does not do](#what-it-does-not-do).
+
+[`docs/FORMAT.md`](docs/FORMAT.md) describes how the documents are laid out.
 
 ![a dose–response curve and a column scatter, rendered by prism-render](docs/sample.svg)
 
@@ -24,21 +27,23 @@ it.
   preserved byte for byte, so saving never silently discards part of a document.
 * **Export** a graph to SVG, or a sheet to CSV.
 
-## What does not
+## What it does not do
+
+**No statistics.** This is the big one. Prism is a statistics package; this is
+not. Analyses in an opened document are carried through with the parameters and
+results Prism computed, but nothing is recalculated — no t-test, ANOVA,
+regression or curve fit. The descriptive summaries behind the graphs (mean, SD,
+SEM, quartiles) are computed for plotting only. **Do not report a number from
+this app that you have not checked in Prism.**
 
 **Classic graphs do not round-trip their appearance.** Prism stores the look of
 XY, Column, Grouped, Survival and Parts-of-whole graphs in an undocumented binary
-blob (`PCFFGRA4`), not in JSON. Opening a document that contains one shows the
-graph rebuilt from its data with Prism's defaults, which is usually close but is
-not the saved appearance. The original blob is kept and written back unchanged,
-so nothing is lost — Prism still opens the file and shows the real graph. Only
-the newer multivariable graphs (dendrogram, heatmap, bubble) store their settings
-in a readable form.
-
-**Statistics are not implemented.** Analyses in an opened document are carried
-through with their stored parameters and results; this build does not recompute
-them. The summary statistics behind the graphs (mean, SD, SEM, quartiles, kernel
-density for violins) are computed, but no hypothesis test or regression is.
+blob rather than in readable form. Opening such a document shows the graph
+rebuilt from its data with sensible defaults — usually close, but not the
+appearance you saved. The original blob is preserved and written back unchanged,
+so nothing is destroyed and Prism still opens the file and shows the real graph.
+Only the newer multivariable graphs (dendrogram, heatmap, bubble) store their
+settings readably.
 
 ## Install
 
@@ -150,6 +155,10 @@ in the dendrogram, and row titles being silently discarded on read.
 
 MIT or Apache-2.0, at your option.
 
-Not affiliated with GraphPad Software. "Prism" and "GraphPad" are their
-trademarks. This project reads and writes their file formats; it contains no
-GraphPad code.
+Not affiliated with, endorsed by, or derived from GraphPad Software. "Prism" and
+"GraphPad" are their trademarks, used here only to say which files this reads.
+
+This project contains no GraphPad code, assets or sample documents. It exists so
+that people can work with data files they already own, and it neither replaces
+Prism nor circumvents any part of it. If you have a Prism licence, keep using
+Prism for anything you intend to publish.

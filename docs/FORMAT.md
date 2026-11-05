@@ -1,10 +1,14 @@
 # GraphPad Prism file formats
 
-What follows was recovered from **GraphPad Prism 11.0.2** (macOS, universal
-Mach-O, `CFBundleShortVersionString` 11.0.2, build 100) by inspecting the shipped
-application bundle, the 78 sample documents inside it, and real documents written
-by Prism 10.5 and 11.0. Observations are separated from inferences; anything
-unresolved is marked as such.
+Notes on how Prism lays out its documents, written so that this project can read
+and write a researcher's own `.prism` and `.pzfx` files without Prism installed.
+The goal is interoperability with one's own data — nothing here reproduces
+Prism's functionality, and no attempt is made to work around licensing.
+
+The description is drawn from **GraphPad Prism 11.0.2** (macOS): the XML schema
+GraphPad ships inside the application, the 78 sample documents that ship with it,
+and documents written by Prism 10.5 and 11.0. Observations are separated from
+inferences; anything unresolved is marked as such.
 
 ## Evidence used
 
@@ -14,9 +18,9 @@ unresolved is marked as such.
 | 67 `.xml` + 8 `.pzfx` sample documents in `Contents/SharedSupport/SampleData` | Real-world use of every table kind |
 | 11 `.prismt` templates in `SharedSupport` | The `.prism` container layout |
 | Documents written by Prism 10.5.0.757 and 11.0.1.89 | Confirmation on files with actual data |
-| Ghidra 12.1.4 disassembly of the arm64 slice (151,250 functions recovered) | The class that reads the classic-graph blob, and that its decoding is not in the Obj-C layer |
 
-Prism itself is closed source. Nothing here is derived from GraphPad source code.
+Prism itself is closed source. Nothing here is copied from or derived from
+GraphPad source code, and this project contains none of their code or assets.
 
 ---
 
@@ -188,26 +192,16 @@ instead spells its appearance out as JSON, using the classes `MVGraph`, `Axis`,
 `BubblesFigure::Settings`, `HeatmapFigure::Settings`,
 `DendrogramFigure::Settings`, `ConfidenceEllipsesFigure::Settings`.
 
-#### Why `PCFFGRA4` is not decoded here
+#### `PCFFGRA4` is not decoded here
 
-Ghidra named the reader: **`PSXNativeBinaryDataProvider`**, 162 methods, with an
-API that walks the blob as a tree — `load`, `nextGraph`, `graphClass`,
-`nextGraphAxis`, `beginPlots`/`nextPlot`/`plotClass`/`endPlots`,
-`beginPlotLegend`/`legendClass`, `beginSublegends`, `classForGraphic`,
-`loadFileEngineTreeFromPath:`, `loadFileEngineTreeFromData:`.
+The blob is a serialized object tree, and its layout is not documented. Decoding
+it would be a sizeable project in its own right, and this repository does not
+attempt it: classic graphs are instead rebuilt from their data table using
+Prism's defaults, and the original blob is written back untouched so that Prism
+still opens the file and shows the real graph.
 
-Decompiling those methods shows they are **thin Objective-C shims** over a C++
-"file engine" core. `graphClass` only chooses between two wrapper classes;
-`plotClass` and `legendClass` delegate immediately. The actual tree parsing is in
-unnamed C++ (the call out of `loadFileEngineTreeFromPath:` reaches
-`FUN_100a96490`), operating on a `shared_ptr` node tree whose class identities
-are not in the symbol table.
-
-Recovering the format therefore means reverse-engineering that C++ tree reader
-and every node type it dispatches to — a substantial project, not a lookup. It is
-not attempted in this repository. **`FEN` = file engine**, and
-`PSXNativeBinaryDataProvider` plus `FUN_100a96490` are the entry points for
-anyone continuing the work.
+The practical consequence for anyone using this library: **the appearance of a
+classic graph does not round-trip**, while its data does.
 
 ### Analyses
 
@@ -327,40 +321,3 @@ preserving that blob verbatim destroys every graph in the document.
 4. The `compatibility` array's full `action` vocabulary; only `warningOpen` and
    `disable` have been observed.
 
----
-
-## Appendix — reproducing the binary analysis
-
-The Ghidra work behind section 1 was done like this, on macOS/arm64. Nothing is
-installed system-wide; everything lands in `$TOOLS`.
-
-```sh
-TOOLS=~/prism-re && mkdir -p "$TOOLS" && cd "$TOOLS"
-
-# Ghidra 12.1.x needs JDK 21; macOS ships older.
-curl -sSLO https://corretto.aws/downloads/latest/amazon-corretto-21-aarch64-macos-jdk.tar.gz
-mkdir -p jdk && tar xzf amazon-corretto-21-aarch64-macos-jdk.tar.gz -C jdk --strip-components=1
-export JAVA_HOME="$TOOLS/jdk/Contents/Home" PATH="$TOOLS/jdk/Contents/Home/bin:$PATH"
-
-curl -sSLO https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.4_build/ghidra_12.1.4_PUBLIC_20260921.zip
-unzip -q ghidra_12.1.4_PUBLIC_20260921.zip && mv ghidra_12.1.4_PUBLIC ghidra
-
-# Ghidra cannot pick a slice out of a universal binary; thin it first.
-lipo -thin arm64 "/Applications/Prism 11.app/Contents/MacOS/Prism" -output Prism.arm64
-
-# The public release ships no macOS decompiler, so build it. Needs Xcode CLT;
-# the Makefile targets x86_64, which runs under Rosetta.
-(cd ghidra/Ghidra/Features/Decompiler/src/decompile/cpp && make -j8 ghidra_opt)
-mkdir -p ghidra/Ghidra/Features/Decompiler/os/mac_arm_64
-cp ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/ghidra_opt \
-   ghidra/Ghidra/Features/Decompiler/os/mac_arm_64/decompile
-
-ghidra/support/analyzeHeadless "$TOOLS/proj" prism -import Prism.arm64 \
-  -processor AARCH64:LE:64:AppleSilicon -max-cpu 6 -analysisTimeoutPerFile 10800
-```
-
-Importing and analysing the 46 MB arm64 slice takes roughly twenty minutes and
-recovers 151,250 functions with Objective-C class and selector names intact.
-From there, `PSXNativeBinaryDataProvider` is the class to read: its 162 methods
-are the tree-walking API over `PCFFGRA4`, and `loadFileEngineTreeFromData:`
-reaches the C++ parser that actually decodes it.
